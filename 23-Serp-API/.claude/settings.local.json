@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "WebFetch(domain:serpapi.com)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}
