@@ -4,7 +4,9 @@ from langchain_core.messages import ChatMessage
 from langchain_core.prompts import PromptTemplate
 from langchain_openai import ChatOpenAI
 from langchain_core.prompts import load_prompt
+from dotenv import load_dotenv
 
+load_dotenv()
 
 st.set_page_config(page_title="나만의 ChatGPT 💬", page_icon="💬")
 st.title("나만의 ChatGPT 💬")
