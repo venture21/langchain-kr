@@ -120,9 +120,9 @@ class MyConversationChain(Runnable):
 class GradioChatApp:
     def __init__(
         self,
-        model_name="gpt-4o-mini",
-        temperature=0.7,
-        memory_type="ConversationBufferWindowMemory",
+        model_name="gpt-4o",
+        temperature=0.0,
+        memory_type="ConversationBufferMemory",
         memory_params=None,
     ):
         self.model_name = model_name
@@ -561,7 +561,7 @@ if __name__ == "__main__":
     demo = create_gradio_interface()
     demo.launch(
         share=False,  # True로 설정하면 공개 URL 생성
-        server_name="0.0.0.0",  # 모든 네트워크 인터페이스에서 접근 가능
+        server_name="127.0.0.1",  # 모든 네트워크 인터페이스에서 접근 가능
         server_port=7860,  # 포트 설정
         show_error=True,
     )
