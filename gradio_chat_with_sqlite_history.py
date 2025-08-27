@@ -18,12 +18,25 @@ from langchain_core.runnables.utils import ConfigurableFieldSpec
 from dotenv import load_dotenv
 import os
 
+# RAG 관련 임포트
+from langchain_openai import OpenAIEmbeddings
+from langchain_community.vectorstores import FAISS
+from langchain_community.document_loaders import DirectoryLoader, TextLoader
+from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain.schema import Document
+from langchain_core.runnables import RunnablePassthrough
+
 # ============================================================================
 # 1. 초기 설정 및 환경 변수 로드
 # ============================================================================
 
 # .env 파일에서 API KEY 정보 로드 (OPENAI_API_KEY 등)
 load_dotenv()
+
+# 전역 변수로 vectorstore와 retriever 관리
+vectorstore = None
+retriever = None
+current_contexts = []  # 현재 검색된 컨텍스트 저장
 
 # ============================================================================
 # 2. LangChain 프롬프트 및 체인 설정
@@ -37,6 +50,19 @@ prompt = ChatPromptTemplate.from_messages(
     [
         ("system", "You are a helpful assistant."),
         MessagesPlaceholder(variable_name="chat_history"),  # 대화 이력이 여기에 삽입됨
+        ("human", "{question}"),
+    ]
+)
+
+# RAG를 위한 프롬프트 템플릿
+rag_prompt = ChatPromptTemplate.from_messages(
+    [
+        ("system", """You are a helpful assistant. Use the following pieces of context to answer the question.
+        If you don't know the answer based on the context, just say that you don't know.
+        
+        Context:
+        {context}"""),
+        MessagesPlaceholder(variable_name="chat_history"),
         ("human", "{question}"),
     ]
 )
@@ -140,17 +166,22 @@ config_fields = [
 ]
 
 
-def get_chain_with_history(model_name="GPT-4o-mini"):
+def get_chain_with_history(model_name="GPT-4o-mini", use_rag=False):
     """
     선택한 모델로 메시지 히스토리를 포함한 체인을 생성
 
     Args:
         model_name (str): 사용할 모델 이름
+        use_rag (bool): RAG 사용 여부
 
     Returns:
         RunnableWithMessageHistory: 히스토리가 포함된 체인
     """
-    chain = get_llm_chain(model_name)
+    if use_rag and retriever is not None:
+        chain = get_rag_chain(model_name)
+    else:
+        chain = get_llm_chain(model_name)
+    
     return RunnableWithMessageHistory(
         chain,  # 선택된 모델의 LLM 체인
         get_chat_history,  # 히스토리 가져오는 함수
