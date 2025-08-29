@@ -166,6 +166,58 @@ config_fields = [
 ]
 
 
+def get_rag_chain(model_name="GPT-4o-mini"):
+    """
+    RAG를 위한 체인 생성
+    
+    Args:
+        model_name (str): 사용할 모델 이름
+    
+    Returns:
+        chain: RAG 파이프라인 체인
+    """
+    global current_contexts
+    
+    # Gemini 모델인 경우
+    if "Gemini" in model_name:
+        if model_name == "Gemini-2.5-Flash":
+            llm = ChatGoogleGenerativeAI(
+                model="gemini-2.5-flash",
+                temperature=0.7,
+                google_api_key=os.getenv("GOOGLE_API_KEY"),
+            )
+        elif model_name == "Gemini-2.5-Pro":
+            llm = ChatGoogleGenerativeAI(
+                model="gemini-2.5-pro",
+                temperature=0.7,
+                google_api_key=os.getenv("GOOGLE_API_KEY"),
+            )
+    # OpenAI 모델인 경우
+    else:
+        if model_name == "GPT-4o-mini":
+            llm = ChatOpenAI(model_name="gpt-4o-mini", temperature=0.7)
+        elif model_name == "GPT-4o":
+            llm = ChatOpenAI(model_name="gpt-4o", temperature=0.7)
+        else:
+            llm = ChatOpenAI(model_name="gpt-4o-mini", temperature=0.7)
+    
+    def format_docs(docs):
+        """문서들을 포맷팅하고 전역 변수에 저장"""
+        global current_contexts
+        current_contexts = docs  # 검색된 문서 저장
+        return "\n\n".join(doc.page_content for doc in docs)
+    
+    # RAG 체인 구성: retriever -> 문서 포맷팅 -> 프롬프트 -> LLM -> 파서
+    chain = (
+        {"context": retriever | format_docs, "question": RunnablePassthrough(), "chat_history": RunnablePassthrough()}
+        | rag_prompt
+        | llm
+        | StrOutputParser()
+    )
+    
+    return chain
+
+
 def get_chain_with_history(model_name="GPT-4o-mini", use_rag=False):
     """
     선택한 모델로 메시지 히스토리를 포함한 체인을 생성
@@ -192,11 +244,109 @@ def get_chain_with_history(model_name="GPT-4o-mini", use_rag=False):
 
 
 # ============================================================================
-# 4. 채팅 응답 처리 함수
+# 4. 문서 로딩 및 벡터스토어 관리 함수
+# ============================================================================
+
+def load_documents(file_path=None, text_content=None):
+    """
+    문서를 로드하고 벡터스토어를 생성하는 함수
+    
+    Args:
+        file_path (str): 파일 경로 (파일에서 로드하는 경우)
+        text_content (str): 텍스트 내용 (직접 입력하는 경우)
+    
+    Returns:
+        str: 처리 결과 메시지
+    """
+    global vectorstore, retriever
+    
+    try:
+        documents = []
+        
+        # 파일에서 로드하는 경우
+        if file_path and os.path.exists(file_path):
+            if os.path.isdir(file_path):
+                # 디렉토리의 모든 텍스트 파일 로드
+                loader = DirectoryLoader(file_path, glob="**/*.txt", loader_cls=TextLoader)
+                documents = loader.load()
+            else:
+                # 단일 파일 로드
+                loader = TextLoader(file_path, encoding='utf-8')
+                documents = loader.load()
+        
+        # 텍스트 직접 입력하는 경우
+        elif text_content and text_content.strip():
+            documents = [Document(page_content=text_content)]
+        
+        else:
+            return "⚠️ 파일 경로 또는 텍스트 내용을 제공해주세요."
+        
+        if not documents:
+            return "⚠️ 문서를 찾을 수 없습니다."
+        
+        # 텍스트 분할
+        text_splitter = RecursiveCharacterTextSplitter(
+            chunk_size=1000,
+            chunk_overlap=200,
+            separators=["\n\n", "\n", ".", "!", "?", ",", " ", ""],
+        )
+        splits = text_splitter.split_documents(documents)
+        
+        # 임베딩 생성 및 벡터스토어 생성
+        embeddings = OpenAIEmbeddings()
+        vectorstore = FAISS.from_documents(splits, embeddings)
+        retriever = vectorstore.as_retriever(
+            search_type="similarity",
+            search_kwargs={"k": 3}  # 상위 3개 문서 검색
+        )
+        
+        return f"✅ {len(splits)}개의 텍스트 청크로 벡터스토어가 생성되었습니다."
+        
+    except Exception as e:
+        return f"❌ 오류 발생: {str(e)}"
+
+
+def clear_vectorstore():
+    """
+    벡터스토어와 retriever를 초기화하는 함수
+    """
+    global vectorstore, retriever, current_contexts
+    vectorstore = None
+    retriever = None
+    current_contexts = []
+    return "✅ 벡터스토어가 초기화되었습니다."
+
+
+def format_contexts_for_display(contexts):
+    """
+    검색된 컨텍스트를 표시용으로 포맷팅하는 함수
+    
+    Args:
+        contexts (list): Document 객체 리스트
+    
+    Returns:
+        str: 포맷팅된 문자열
+    """
+    if not contexts:
+        return "검색된 관련 문서가 없습니다."
+    
+    formatted = "📚 **검색된 관련 문서:**\n\n"
+    for i, doc in enumerate(contexts, 1):
+        content = doc.page_content[:500]  # 최대 500자까지만 표시
+        if len(doc.page_content) > 500:
+            content += "..."
+        formatted += f"**[문서 {i}]**\n{content}\n\n"
+        formatted += "-" * 50 + "\n\n"
+    
+    return formatted
+
+
+# ============================================================================
+# 5. 채팅 응답 처리 함수
 # ============================================================================
 
 
-def chat_response(message, history, user_id, conversation_id, model_name):
+def chat_response(message, history, user_id, conversation_id, model_name, use_rag):
     """
     채팅 응답을 생성하는 핵심 함수
 
@@ -206,27 +356,30 @@ def chat_response(message, history, user_id, conversation_id, model_name):
         user_id (str): 사용자 식별자
         conversation_id (str): 채팅방 식별자
         model_name (str): 사용할 AI 모델 이름
+        use_rag (bool): RAG 사용 여부
 
     Yields:
-        list: 업데이트된 대화 기록 (스트리밍)
+        tuple: (업데이트된 대화 기록, retriever 컨텍스트)
 
     주요 기능:
     1. 입력 검증 (사용자명, 채팅방 이름 확인)
     2. 특수문자 처리 (공백을 언더스코어로 변환)
     3. 선택된 모델로 LLM 스트리밍 응답 생성
-    4. 실시간으로 UI 업데이트
+    4. RAG 사용 시 retriever 컨텍스트 반환
+    5. 실시간으로 UI 업데이트
     """
+    global current_contexts
 
     # 사용자명과 채팅방 이름 검증
     if not user_id or not user_id.strip():
         history = history or []
         history.append((message, "⚠️ 사용자명을 입력해 주세요."))
-        return history
+        return history, ""
 
     if not conversation_id or not conversation_id.strip():
         history = history or []
         history.append((message, "⚠️ 채팅방 이름을 입력해 주세요."))
-        return history
+        return history, ""
 
     # 드롭다운에서 선택한 값에 "(N개 메시지)" 형식이 포함된 경우 제거
     if " (" in conversation_id and conversation_id.endswith(")"):
@@ -238,7 +391,7 @@ def chat_response(message, history, user_id, conversation_id, model_name):
 
     # 디버깅: 현재 사용 중인 테이블, 세션, 모델 정보 콘솔 출력
     print(
-        f"📊 DB 정보: 테이블명={user_id}, 세션ID={conversation_id}, 모델={model_name}"
+        f"📊 DB 정보: 테이블명={user_id}, 세션ID={conversation_id}, 모델={model_name}, RAG={use_rag}"
     )
 
     # LangChain 설정 객체 생성
@@ -249,8 +402,18 @@ def chat_response(message, history, user_id, conversation_id, model_name):
         history = []
 
     try:
+        # RAG 사용 체크
+        if use_rag and retriever is None:
+            history.append((message, "⚠️ 먼저 문서를 업로드하여 벡터스토어를 생성해주세요."))
+            yield history, ""
+            return
+
         # 선택된 모델로 체인 생성
-        chain_with_history = get_chain_with_history(model_name)
+        chain_with_history = get_chain_with_history(model_name, use_rag=use_rag)
+
+        # RAG 사용 시 컨텍스트 초기화
+        if use_rag:
+            current_contexts = []
 
         # 스트리밍 응답 생성
         response = ""
@@ -259,14 +422,16 @@ def chat_response(message, history, user_id, conversation_id, model_name):
             response += chunk
             # 매 청크마다 전체 대화 기록을 업데이트하여 UI에 반영
             updated_history = history + [(message, response)]
-            yield updated_history
+            # RAG 사용 시 현재 컨텍스트 포맷팅
+            context_display = format_contexts_for_display(current_contexts) if use_rag else ""
+            yield updated_history, context_display
     except Exception as e:
         # 오류 발생시 오류 메시지를 대화에 추가
         error_msg = f"오류가 발생했습니다: {str(e)}"
         if "GOOGLE_API_KEY" in str(e):
             error_msg += "\n💡 Gemini 모델을 사용하려면 .env 파일에 GOOGLE_API_KEY를 설정해주세요."
         history.append((message, error_msg))
-        yield history
+        yield history, ""
 
 
 # ============================================================================
@@ -630,6 +795,32 @@ with gr.Blocks(title="LangChain 채팅봇", theme=gr.themes.Soft()) as demo:
                 value="GPT-4o-mini",
                 info="사용할 AI 모델을 선택하세요",
             )
+            
+            # RAG 설정
+            gr.Markdown("### 📚 RAG 설정")
+            
+            use_rag_checkbox = gr.Checkbox(
+                label="RAG 모드 사용",
+                value=False,
+                info="문서 기반 응답 생성 활성화"
+            )
+            
+            with gr.Row():
+                file_path_input = gr.Textbox(
+                    label="파일/폴더 경로",
+                    placeholder="예: /path/to/documents 또는 /path/to/file.txt",
+                    lines=1,
+                )
+            
+            text_input = gr.Textbox(
+                label="직접 텍스트 입력",
+                placeholder="문서 내용을 직접 입력하세요...",
+                lines=3,
+            )
+            
+            with gr.Row():
+                load_docs_btn = gr.Button("📥 문서 로드", variant="primary")
+                clear_vectorstore_btn = gr.Button("🗑️ 벡터스토어 초기화")
 
             # 제어 버튼들
             with gr.Row():
@@ -665,11 +856,29 @@ with gr.Blocks(title="LangChain 채팅봇", theme=gr.themes.Soft()) as demo:
         with gr.Column(scale=2):
             # 채팅 디스플레이
             chatbot = gr.Chatbot(
-                height=600,
+                height=400,
                 label="채팅 내역",
                 show_copy_button=True,  # 복사 버튼 표시
                 type="tuples",  # (사용자, AI) 튜플 형식
             )
+            
+            # Retriever 결과 출력 창
+            retriever_output = gr.Markdown(
+                value="",
+                label="검색된 컨텍스트",
+                elem_id="retriever_output",
+            )
+            
+            # Accordion으로 retriever 결과 접기/펼치기 가능
+            with gr.Accordion("📚 검색된 문서 컨텍스트", open=False):
+                retriever_display = gr.Textbox(
+                    value="",
+                    label="",
+                    lines=10,
+                    max_lines=20,
+                    interactive=False,
+                    show_copy_button=True,
+                )
 
             # 메시지 입력창
             msg = gr.Textbox(
@@ -690,8 +899,8 @@ with gr.Blocks(title="LangChain 채팅봇", theme=gr.themes.Soft()) as demo:
     # Enter 키로 메시지 전송
     msg.submit(
         chat_response,
-        inputs=[msg, chatbot, user_id_dropdown, conversation_dropdown, model_dropdown],
-        outputs=[chatbot],
+        inputs=[msg, chatbot, user_id_dropdown, conversation_dropdown, model_dropdown, use_rag_checkbox],
+        outputs=[chatbot, retriever_display],
         show_progress=True,
     ).then(
         lambda: "", outputs=[msg]  # 입력창 비우기
@@ -705,8 +914,8 @@ with gr.Blocks(title="LangChain 채팅봇", theme=gr.themes.Soft()) as demo:
     # 전송 버튼 클릭
     submit_btn.click(
         chat_response,
-        inputs=[msg, chatbot, user_id_dropdown, conversation_dropdown, model_dropdown],
-        outputs=[chatbot],
+        inputs=[msg, chatbot, user_id_dropdown, conversation_dropdown, model_dropdown, use_rag_checkbox],
+        outputs=[chatbot, retriever_display],
         show_progress=True,
     ).then(lambda: "", outputs=[msg]).then(
         # 대화 후 채팅방 목록 자동 업데이트
@@ -718,8 +927,8 @@ with gr.Blocks(title="LangChain 채팅봇", theme=gr.themes.Soft()) as demo:
     # 재시도 버튼 (입력창을 비우지 않음)
     retry_btn.click(
         chat_response,
-        inputs=[msg, chatbot, user_id_dropdown, conversation_dropdown, model_dropdown],
-        outputs=[chatbot],
+        inputs=[msg, chatbot, user_id_dropdown, conversation_dropdown, model_dropdown, use_rag_checkbox],
+        outputs=[chatbot, retriever_display],
         show_progress=True,
     )
 
@@ -761,6 +970,19 @@ with gr.Blocks(title="LangChain 채팅봇", theme=gr.themes.Soft()) as demo:
 
     # DB 정보 표시
     db_info_btn.click(show_db_info, outputs=[status_text])
+    
+    # 문서 로드 버튼
+    load_docs_btn.click(
+        load_documents,
+        inputs=[file_path_input, text_input],
+        outputs=[status_text],
+    )
+    
+    # 벡터스토어 초기화 버튼
+    clear_vectorstore_btn.click(
+        clear_vectorstore,
+        outputs=[status_text],
+    )
 
 # ============================================================================
 # 9. 애플리케이션 실행

@@ -1,0 +1,8 @@
+langchain
+langchain-openai
+langchain-huggingface
+langchain-upstage
+langchain-community
+chromadb
+gradio
+python-dotenv

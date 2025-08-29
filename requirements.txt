@@ -21,13 +21,10 @@ openai==1.67.0
 deepl==1.21.1
 kiwipiepy==0.20.4
 konlpy==0.6.0
-
 pandas==2.2.3
 rank-bm25==0.2.2
-
 redis==5.2.1
 chromadb==0.6.3
-
 pymupdf==1.25.4
 pypdf==4.3.1
 pdfplumber==0.11.5
