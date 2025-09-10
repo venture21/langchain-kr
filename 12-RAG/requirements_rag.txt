@@ -1,0 +1,27 @@
+# Core dependencies
+langchain>=0.3.0
+langchain-community>=0.3.0
+langchain-openai>=0.2.0
+langchain-core>=0.3.0
+
+# LlamaParser for PDF processing
+llama-parse>=0.5.0
+
+# Vector store
+chromadb>=0.5.0
+
+# OpenAI
+openai>=1.0.0
+
+# PDF processing fallback
+pypdf>=3.17.0
+
+# Web interface
+gradio>=4.0.0
+
+# Environment variables
+python-dotenv>=1.0.0
+
+# Additional utilities
+numpy>=1.24.0
+tiktoken>=0.5.0
